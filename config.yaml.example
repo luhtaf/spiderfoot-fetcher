@@ -1,0 +1,90 @@
+# SpiderFoot Fetcher Configuration Example
+
+# Database Configuration
+database:
+  path: "/path/to/spiderfoot.db"  # Path to SpiderFoot SQLite database
+  
+# Pipeline Workers Configuration
+workers:
+  reader: 2      # Number of SQL reader workers (recommended: 2-4)
+  parser: 4      # Number of data parser workers (CPU intensive, recommended: 4-8)  
+  indexer: 3     # Number of Elasticsearch indexer workers (I/O bound, recommended: 2-6)
+
+# Batch Configuration
+batch:
+  size: 100      # Records per batch from database (recommended: 50-200)
+  
+# Elasticsearch Configuration
+elasticsearch:
+  url: "http://localhost:9200"        # Elasticsearch cluster URL
+  username: "elastic"                 # Elasticsearch username (optional)
+  password: "changeme"                # Elasticsearch password (optional)
+  verify_certs: false                 # Verify SSL certificates
+  index: "spiderfoot"                 # Base index name for SpiderFoot data
+  cve_index: "go-list-cve-*"         # Index pattern for CVE enrichment data
+
+# Application Configuration
+app:
+  type: "development"                 # "development" or "production"
+  version: 2                          # Data schema version
+  timestamp_file: "timestamp_cron.txt" # File to store last run timestamp
+  csv_source: "organization_data.csv"  # CSV file with organization metadata
+  error_log: "error.log"              # Error log file path
+  
+# Statistics Configuration (Suricata-style monitoring)
+stats:
+  enabled: true                       # Enable/disable stats collection
+  interval: 30s                       # Stats write interval (e.g., 10s, 1m, 5m)
+  file: "pipeline_stats.json"         # Stats output file
+  
+# SQL Query for data extraction
+sql_query: |
+  SELECT DISTINCT
+    si.name as 'SCAN_NAME',
+    sr.*,
+    SUBSTR(sr.data, 1, INSTR(sr.data || CHAR(10), CHAR(10)) - 1) as Vulnerability,
+    CASE 
+        WHEN scr.title LIKE '%: %' THEN SUBSTR(scr.title, INSTR(scr.title, ': ') + 2)
+        WHEN scr.title LIKE '%on %' THEN SUBSTR(scr.title, INSTR(scr.title, 'on ') + 3)
+    END as IP_Addresses
+  FROM 
+    tbl_scan_results sr
+  JOIN 
+    tbl_scan_correlation_results_events scre ON sr.hash = scre.event_hash
+  JOIN 
+    tbl_scan_correlation_results scr ON scre.correlation_id = scr.id
+  JOIN 
+    tbl_scan_instance si ON scr.scan_instance_id = si.guid
+  WHERE 
+    sr.generated > ? AND sr.generated <= ?
+  GROUP BY 
+    sr.hash
+  ORDER BY 
+    sr.data
+
+# Performance Tuning Notes:
+# 
+# Reader Workers:
+# - Increase if database I/O is bottleneck
+# - Monitor "records_per_second" in stats
+# - Too many may cause database connection issues
+#
+# Parser Workers: 
+# - CPU intensive stage (CVE enrichment, data parsing)
+# - Increase if this stage shows low throughput
+# - Monitor "queue_depth" between reader and parser
+#
+# Indexer Workers:
+# - I/O bound to Elasticsearch
+# - Increase if Elasticsearch can handle more concurrent requests
+# - Monitor Elasticsearch cluster performance
+#
+# Batch Size:
+# - Larger batches = better database performance, more memory usage
+# - Smaller batches = better pipeline flow, less memory usage
+# - Recommended range: 50-200 based on available memory
+#
+# Stats Interval:
+# - More frequent = better monitoring, more I/O overhead
+# - Less frequent = less overhead, delayed problem detection
+# - Recommended: 30s for production, 10s for development

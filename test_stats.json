@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-09-23T23:07:04+07:00",
+  "reader": {
+    "records_per_second": 0,
+    "avg_processing_time_ms": 0,
+    "active_workers": 0,
+    "total_processed": 0,
+    "error_count": 0
+  },
+  "parser": {
+    "records_per_second": 0,
+    "avg_processing_time_ms": 0,
+    "active_workers": 0,
+    "total_processed": 0,
+    "error_count": 0
+  },
+  "indexer": {
+    "records_per_second": 0,
+    "avg_processing_time_ms": 0,
+    "active_workers": 0,
+    "total_processed": 0,
+    "error_count": 0
+  },
+  "uptime": "301.2886ms"
+}
