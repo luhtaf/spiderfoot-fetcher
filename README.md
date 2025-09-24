@@ -65,14 +65,20 @@ cp config.yaml.example config.yaml
 # Development mode (dry run)
 ./spiderfoot-fetcher
 
-# Production mode
-./spiderfoot-fetcher -config config.yaml -mode production
-
-# With profiling enabled
-./spiderfoot-fetcher -pprof :6060
+# Production mode (edit config.yaml first)
+./spiderfoot-fetcher
 ```
 
-### 3. Monitor Performance
+### 3. Schedule for Production
+```bash
+# Add to crontab for hourly execution
+0 * * * * /path/to/spiderfoot-fetcher >> /var/log/spiderfoot-pipeline.log 2>&1
+
+# Or use systemd timer
+sudo systemctl enable --now spiderfoot-fetcher.timer
+```
+
+### 4. Monitor Performance
 ```bash
 # Real-time stats
 tail -f pipeline_stats.json
@@ -135,29 +141,118 @@ export ELASTICSEARCH_USERNAME="elastic"
 export ELASTICSEARCH_PASSWORD="your-password"
 ```
 
+## 📦 Deployment Patterns
+
+### 🕐 Cron Job (Recommended)
+```bash
+# Every hour at minute 0
+0 * * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher >> /var/log/spiderfoot.log 2>&1
+
+# Every 30 minutes
+*/30 * * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher
+
+# Daily at 2 AM with 24-hour fallback
+0 2 * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher
+```
+
+### 🐳 Docker Deployment
+```bash
+# One-time execution
+docker run --rm -v /path/to/config:/config luhtaf/spiderfoot-fetcher
+
+# With cron in container
+docker run -d --name spiderfoot-cron \
+  -v /path/to/config:/config \
+  -v /path/to/db:/data \
+  luhtaf/spiderfoot-fetcher:latest
+```
+
+### ⚙️ Systemd Service + Timer
+```ini
+# /etc/systemd/system/spiderfoot-fetcher.service
+[Unit]
+Description=SpiderFoot to Elasticsearch Pipeline
+After=network.target
+
+[Service]
+Type=oneshot
+User=spiderfoot
+WorkingDirectory=/opt/spiderfoot-fetcher
+ExecStart=/opt/spiderfoot-fetcher/spiderfoot-fetcher
+StandardOutput=journal
+StandardError=journal
+
+# /etc/systemd/system/spiderfoot-fetcher.timer
+[Unit]
+Description=Run SpiderFoot Pipeline every hour
+Requires=spiderfoot-fetcher.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+### 🔄 CI/CD Integration
+```yaml
+# GitHub Actions example
+name: SpiderFoot Data Pipeline
+on:
+  schedule:
+    - cron: '0 */2 * * *'  # Every 2 hours
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Pipeline
+        run: ./spiderfoot-fetcher
+```
+
 ## 🏗️ Pipeline Architecture
 
-### Stage 1: Reader Workers
-- **Purpose**: Extract records from SpiderFoot SQLite database
-- **Concurrency**: Configurable worker pool with offset-based pagination
-- **Safety**: Timestamp range isolation (`last_run < timestamp <= now`)
-- **Output**: Raw SpiderFoot records via channels
+### 🔄 Short-Lived Worker Model
 
-### Stage 2: Parser Workers  
-- **Purpose**: Parse and enrich scan data
+This pipeline uses a **short-lived worker architecture** designed for batch processing:
+
+- **📅 Batch-Oriented**: Processes data between timestamps (e.g., last 12 hours)
+- **⏱️ Finite Execution**: Workers finish when no more data to process
+- **🔄 Cron-Style**: Designed to run periodically (via cron/scheduler)
+- **💾 State Persistence**: Saves timestamp for next run continuity
+
+**vs Long-Running Workers:**
+| Aspect | Short-Lived (This Pipeline) | Long-Running Workers |
+|--------|----------------------------|---------------------|
+| **Lifecycle** | Start → Process → Exit | Start → Listen Forever |
+| **Use Case** | Batch processing, ETL jobs | Stream processing, real-time |
+| **Resource Usage** | Periodic, bounded | Continuous |
+| **Failure Recovery** | Restart from last timestamp | In-memory state loss |
+
+### Stage 1: Reader Workers (Short-Lived)
+- **Purpose**: Extract records from SpiderFoot SQLite database
+- **Lifecycle**: Query database → Send to channel → Exit when no more records
+- **Concurrency**: Multiple workers with offset-based pagination
+- **Completion**: Workers exit when their batch is exhausted
+- **Safety**: Timestamp range isolation (`last_run < timestamp <= now`)
+
+### Stage 2: Parser Workers (Channel-Driven)
+- **Purpose**: Parse and enrich scan data until channel closes
 - **Processing**: 
   - Grok pattern parsing for organization metadata
   - CVE enrichment with CISA KEV data
   - Data validation and transformation
+- **Lifecycle**: Read from channel → Process → Exit when channel closes
 - **Intelligence**: Conditional processing based on scan type
-- **Output**: Enriched records ready for indexing
 
-### Stage 3: Indexer Workers
-- **Purpose**: Index processed data to Elasticsearch
+### Stage 3: Indexer Workers (Bounded)
+- **Purpose**: Index processed data to Elasticsearch until completion
 - **Features**: 
   - Dynamic index naming with date partitioning
   - Bulk operations for performance
   - Error resilience with retry logic
+- **Lifecycle**: Read from channel → Index → Exit when channel closes
 - **Monitoring**: Per-operation performance tracking
 
 ```mermaid
