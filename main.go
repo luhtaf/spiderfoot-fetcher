@@ -61,7 +61,7 @@ type AppConfig struct {
 	Type          string `yaml:"type"`
 	Version       int    `yaml:"version"`
 	TimestampFile string `yaml:"timestamp_file"`
-	CSVSource     string `yaml:"csv_source"`
+	FallbackHours int    `yaml:"fallback_hours"`
 	ErrorLog      string `yaml:"error_log"`
 }
 
@@ -588,16 +588,27 @@ func (p *Pipeline) getLastTimestamp() (int64, error) {
 	data, err := os.ReadFile(p.config.App.TimestampFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Create file with 0
-			err = os.WriteFile(p.config.App.TimestampFile, []byte("0"), 0644)
-			return 0, err
+			// Use fallback hours (default 12 hours ago)
+			fallbackHours := p.config.App.FallbackHours
+			if fallbackHours == 0 {
+				fallbackHours = 12 // Default to 12 hours
+			}
+			fallbackTimestamp := time.Now().Add(-time.Duration(fallbackHours) * time.Hour).Unix()
+			// Create file with fallback timestamp
+			err = os.WriteFile(p.config.App.TimestampFile, []byte(strconv.FormatInt(fallbackTimestamp, 10)), 0644)
+			return fallbackTimestamp, err
 		}
 		return 0, err
 	}
 
 	timestamp, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	if err != nil {
-		return 0, nil // Default to 0 if invalid
+		// If invalid timestamp, use fallback
+		fallbackHours := p.config.App.FallbackHours
+		if fallbackHours == 0 {
+			fallbackHours = 12
+		}
+		return time.Now().Add(-time.Duration(fallbackHours) * time.Hour).Unix(), nil
 	}
 
 	return timestamp, nil

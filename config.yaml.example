@@ -28,7 +28,7 @@ app:
   type: "development"                 # "development" or "production"
   version: 2                          # Data schema version
   timestamp_file: "timestamp_cron.txt" # File to store last run timestamp
-  csv_source: "organization_data.csv"  # CSV file with organization metadata
+  fallback_hours: 12                  # Hours to look back when timestamp file doesn't exist
   error_log: "error.log"              # Error log file path
   
 # Statistics Configuration (Suricata-style monitoring)

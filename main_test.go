@@ -446,15 +446,18 @@ func TestTimestampManagement(t *testing.T) {
 		config: Config{
 			App: AppConfig{
 				TimestampFile: "test_timestamp.txt",
+				FallbackHours: 2, // Test with 2 hours fallback
 			},
 		},
 	}
 	defer os.Remove("test_timestamp.txt")
 
-	// Test getting timestamp when file doesn't exist
+	// Test getting timestamp when file doesn't exist (should use fallback)
 	timestamp, err := pipeline.getLastTimestamp()
 	assert.NoError(t, err)
-	assert.Equal(t, int64(0), timestamp)
+	// Should be approximately 2 hours ago
+	expectedTime := time.Now().Add(-2 * time.Hour).Unix()
+	assert.InDelta(t, expectedTime, timestamp, 60) // Allow 60 seconds difference
 
 	// Test updating timestamp
 	testTimestamp := int64(1695456000)
