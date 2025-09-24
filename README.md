@@ -223,37 +223,77 @@ This pipeline uses a **short-lived worker architecture** designed for batch proc
 - **💾 State Persistence**: Saves timestamp for next run continuity
 
 **vs Long-Running Workers:**
-| Aspect | Short-Lived (This Pipeline) | Long-Running Workers |
+| Aspect | Short-Lived (This Pipeline) | Long-Running Workers ([nvd-fetcher](https://github.com/luhtaf/nvd-fetcher)) |
 |--------|----------------------------|---------------------|
 | **Lifecycle** | Start → Process → Exit | Start → Listen Forever |
-| **Use Case** | Batch processing, ETL jobs | Stream processing, real-time |
-| **Resource Usage** | Periodic, bounded | Continuous |
+| **Worker Pattern** | Spawn per batch → Exit when done | 1000+ workers always listening |
+| **Processing Model** | Batch-oriented (100 records/batch) | Per-item (1 CVE/worker) |
+| **Memory Profile** | Memory efficient (periodic) | CPU efficient (continuous) |
+| **Use Case** | ETL jobs, scheduled processing | Stream processing, real-time |
+| **Resource Usage** | Periodic, bounded | Continuous, high throughput |
 | **Failure Recovery** | Restart from last timestamp | In-memory state loss |
+| **Concurrency** | Finite workers per stage | Massive parallelism (1000+ workers) |
+| **Deployment** | Cron job, batch scheduler | Always-on service |
 
 ### Stage 1: Reader Workers (Short-Lived)
 - **Purpose**: Extract records from SpiderFoot SQLite database
-- **Lifecycle**: Query database → Send to channel → Exit when no more records
-- **Concurrency**: Multiple workers with offset-based pagination
-- **Completion**: Workers exit when their batch is exhausted
+- **Lifecycle**: Query database → Send to channel → **Exit when no more records**
+- **Pattern**: `for { query() → send() → offset++ }` until empty result
+- **Concurrency**: Multiple workers with offset-based pagination (Worker 1: offset 0, Worker 2: offset 100, etc.)
+- **Completion**: Workers naturally terminate when their query returns empty
 - **Safety**: Timestamp range isolation (`last_run < timestamp <= now`)
 
 ### Stage 2: Parser Workers (Channel-Driven)
 - **Purpose**: Parse and enrich scan data until channel closes
+- **Lifecycle**: `for record := range rawChan` → **Exit when channel closes**
 - **Processing**: 
   - Grok pattern parsing for organization metadata
-  - CVE enrichment with CISA KEV data
+  - CVE enrichment with CISA KEV data (with caching)
   - Data validation and transformation
-- **Lifecycle**: Read from channel → Process → Exit when channel closes
+- **Pattern**: Channel consumer that terminates when upstream closes
 - **Intelligence**: Conditional processing based on scan type
 
 ### Stage 3: Indexer Workers (Bounded)
 - **Purpose**: Index processed data to Elasticsearch until completion
+- **Lifecycle**: `for record := range parsedChan` → **Exit when channel closes**
 - **Features**: 
   - Dynamic index naming with date partitioning
-  - Bulk operations for performance
-  - Error resilience with retry logic
-- **Lifecycle**: Read from channel → Index → Exit when channel closes
+  - Individual document indexing (not bulk)
+  - Error resilience with structured logging
+- **Pattern**: Channel consumer with finite data set
 - **Monitoring**: Per-operation performance tracking
+
+### 🔄 **Short-Lived vs Long-Running Comparison**
+
+**This Pipeline (Short-Lived)**:
+```go
+// Reader: Query until no more data
+for {
+    rows := db.Query("... LIMIT 100 OFFSET ?", offset)
+    if len(records) == 0 {
+        return // 🏁 Worker exits naturally
+    }
+    // Process batch and increment offset
+}
+
+// Parser: Process until channel closes  
+for record := range rawChan {
+    process(record)
+} // 🏁 Worker exits when channel closes
+```
+
+**nvd-fetcher (Long-Running)**:
+```go
+// 1000 workers always listening
+for i := 0; i < 1000; i++ {
+    go func() {
+        for cveTask := range taskChan { // 🔄 Never exits
+            process(cveTask)           // 1 CVE per worker
+        }
+    }()
+}
+// Workers run forever, waiting for next CVE
+```
 
 ```mermaid
 graph LR
