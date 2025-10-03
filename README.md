@@ -66,28 +66,18 @@ cp config.yaml.example config.yaml
 
 The application supports two distinct operation modes:
 
-#### 🔄 Pipeline Mode (Default)
+#### 🔄 Pipeline Mode
 Processes new SpiderFoot scan results with full enrichment:
 ```bash
-# Command line override (recommended)
+# Run pipeline mode (required argument)
 ./spiderfoot-fetcher pipeline
-
-# Or set mode in config.yaml
-app:
-  mode: "pipeline"  # Process new scan results
-./spiderfoot-fetcher
 ```
 
-#### 🔧 Migration Mode  
+#### 🔧 Migration Mode
 Updates existing Elasticsearch records with new enrichment data:
 ```bash
-# Command line override (recommended)
+# Run migration mode (required argument)
 ./spiderfoot-fetcher migrate
-
-# Or set mode in config.yaml
-app:
-  mode: "migration"  # Update existing records
-./spiderfoot-fetcher
 ```
 
 ### 3. Command Line Interface
@@ -102,9 +92,6 @@ app:
 
 # Run pipeline (process new records)  
 ./spiderfoot-fetcher pipeline
-
-# Use config.yaml mode setting
-./spiderfoot-fetcher
 ```
 
 #### Development vs Production
@@ -324,14 +311,14 @@ app:
 
 ### 🕐 Cron Job (Recommended)
 ```bash
-# Every hour at minute 0
-0 * * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher >> /var/log/spiderfoot.log 2>&1
+# Every hour at minute 0 - pipeline mode
+0 * * * * cd /opt/spiderfoot-fetcher && ./spiderfoot-fetcher pipeline >> /var/log/spiderfoot.log 2>&1
 
-# Every 30 minutes
-*/30 * * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher
+# Every 30 minutes - pipeline mode
+*/30 * * * * cd /opt/spiderfoot-fetcher && ./spiderfoot-fetcher pipeline
 
-# Daily at 2 AM with 24-hour fallback
-0 2 * * * /opt/spiderfoot-fetcher/spiderfoot-fetcher
+# Weekly migration at Sunday 2 AM to refresh CVE/EPSS data
+0 2 * * 0 cd /opt/spiderfoot-fetcher && ./spiderfoot-fetcher migrate
 ```
 
 ### 🐳 Docker Deployment
