@@ -12,7 +12,7 @@
 
 - **🔄 3-Stage Concurrent Pipeline**: Reader → Parser → Indexer with configurable worker pools
 - **⚡ High Performance**: Concurrent processing with non-blocking channels
-- **🛡️ CVE Enrichment**: Automatic CVE scoring and CISA KEV integration
+- **🛡️ CVE Enrichment**: Automatic CVE scoring with CISA KEV and EPSS integration
 - **📊 Real-time Monitoring**: Suricata-style performance metrics and statistics
 - **🔍 Smart Error Handling**: Detailed error logging with record traceability
 - **⏰ Safe Timestamp Management**: Prevents duplicate processing during concurrent runs
@@ -37,7 +37,7 @@
 - Go 1.21 or higher
 - SQLite3 (SpiderFoot database)
 - Elasticsearch 7.x/8.x cluster
-- Access to CVE data indices
+- Access to CVE data and EPSS indices
 
 ### Install from Source
 ```bash
@@ -117,14 +117,16 @@ elasticsearch:
   verify_certs: false
   index: "spiderfoot"
   cve_index: "go-list-cve-*"
+  epss_index: "epss-scores"
 
 # Application Configuration
 app:
   type: "development"  # "production" for live indexing
   version: 2
   timestamp_file: "timestamp_cron.txt"
-  csv_source: "organization_data.csv"
+  fallback_hours: 12
   error_log: "error.log"
+  organization_data: "organization_data.csv"
 
 # Statistics Configuration
 stats:
@@ -140,6 +142,34 @@ export ELASTICSEARCH_URL="https://elasticsearch:9200"
 export ELASTICSEARCH_USERNAME="elastic"
 export ELASTICSEARCH_PASSWORD="your-password"
 ```
+
+## 🏢 Organization Data
+
+### CSV Format
+Create `organization_data.csv` with organization to subsektor mapping:
+
+```csv
+organisasi,subsektor
+Bank Bni,Perbankan
+Bank Bri,Perbankan
+Rumah Sakit Siloam Jakarta,Kesehatan
+Telkom Indonesia,Telekomunikasi
+Pln,Energi
+Garuda Indonesia,Transportasi
+Universitas Indonesia,Pendidikan
+```
+
+### Configuration
+```yaml
+app:
+  organization_data: "organization_data.csv"  # Path to CSV file
+```
+
+### Behavior
+- **Automatic Loading**: CSV loaded at startup with logging
+- **Graceful Fallback**: Missing file results in empty subsektor fields
+- **Case Sensitive**: Exact match required between scan name and CSV data
+- **Flexible Format**: Support for spaces and special characters in names
 
 ## 📦 Deployment Patterns
 
@@ -248,7 +278,7 @@ This pipeline uses a **short-lived worker architecture** designed for batch proc
 - **Lifecycle**: `for record := range rawChan` → **Exit when channel closes**
 - **Processing**: 
   - Grok pattern parsing for organization metadata
-  - CVE enrichment with CISA KEV data (with caching)
+  - CVE enrichment with CISA KEV and EPSS data (with caching)
   - Data validation and transformation
 - **Pattern**: Channel consumer that terminates when upstream closes
 - **Intelligence**: Conditional processing based on scan type
@@ -331,10 +361,27 @@ graph LR
   }
   ```
 
+### EPSS Integration
+- **EPSS Data**: Exploit Prediction Scoring System from `epss-scores` index
+- **Fields Added**:
+  ```json
+  {
+    "hasEpss": true,
+    "epss": {
+      "cve": "CVE-2021-44228",
+      "epss": "0.973730000",
+      "percentile": "0.999940000", 
+      "date": "2024-10-01",
+      "timestamp": "2024-10-02T10:00:59.442658735+07:00"
+    }
+  }
+  ```
+
 ### Scoring Logic
 1. **Prefer CVSS v3.1** over v2.0 when available
 2. **Fallback hierarchy**: v3 → v2 → base score
 3. **Severity mapping**: Numeric score to categorical severity
+4. **EPSS enrichment**: Adds exploit prediction probability
 
 ## 📊 Performance Monitoring
 

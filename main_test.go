@@ -79,9 +79,11 @@ elasticsearch:
   url: "http://localhost:9200"
   index: "test"
   cve_index: "cve-*"
+  epss_index: "epss-scores"
 app:
   type: "development"
   version: 2
+  organization_data: ""
 stats:
   enabled: true
   interval: 30s
@@ -214,6 +216,111 @@ func TestApplyCVEData(t *testing.T) {
 	assert.Equal(t, 7.5, parsed2.Score)
 	assert.Equal(t, "HIGH", parsed2.Severity)
 	assert.Equal(t, "Analyzed", parsed2.VulnStatus)
+}
+
+// Test EPSS enrichment
+func TestEPSSEnrichment(t *testing.T) {
+	pipeline := &Pipeline{
+		config: Config{
+			Elasticsearch: ElasticsearchConfig{
+				EPSSIndex: "epss-scores",
+			},
+		},
+		epssCache: sync.Map{},
+	}
+
+	// Mock HTTP client for EPSS search
+	mockClient := NewMockHTTPClient()
+	mockClient.SetResponse("http://localhost:9200/epss-scores/_search", 200, `{
+		"hits": {
+			"hits": [{
+				"_source": {
+					"cve": "CVE-2021-44228",
+					"epss": "0.973730000",
+					"percentile": "0.999940000",
+					"date": "2024-10-01",
+					"timestamp": "2024-10-02T10:00:59.442658735+07:00"
+				}
+			}]
+		}
+	}`)
+
+	pipeline.es = &ElasticsearchClient{
+		httpClient: mockClient,
+		baseURL:    "http://localhost:9200",
+	}
+
+	// Test case with EPSS data
+	parsed := &ParsedRecord{
+		Vulnerability: "CVE-2021-44228",
+	}
+
+	err := pipeline.enrichEPSS(parsed)
+	assert.NoError(t, err)
+	assert.True(t, parsed.HasEpss)
+	assert.NotNil(t, parsed.Epss)
+	assert.Equal(t, "CVE-2021-44228", parsed.Epss.CVE)
+	assert.Equal(t, "0.973730000", parsed.Epss.Epss)
+	assert.Equal(t, "0.999940000", parsed.Epss.Percentile)
+	assert.Equal(t, "2024-10-01", parsed.Epss.Date)
+
+	// Test cache functionality
+	parsed2 := &ParsedRecord{
+		Vulnerability: "CVE-2021-44228",
+	}
+
+	err = pipeline.enrichEPSS(parsed2)
+	assert.NoError(t, err)
+	assert.True(t, parsed2.HasEpss)
+	assert.NotNil(t, parsed2.Epss)
+	assert.Equal(t, "CVE-2021-44228", parsed2.Epss.CVE)
+
+	// Test case with no EPSS data
+	mockClient.SetResponse("http://localhost:9200/epss-scores/_search", 200, `{
+		"hits": {
+			"hits": []
+		}
+	}`)
+
+	parsed3 := &ParsedRecord{
+		Vulnerability: "CVE-9999-9999",
+	}
+
+	err = pipeline.enrichEPSS(parsed3)
+	assert.NoError(t, err)
+	assert.False(t, parsed3.HasEpss)
+	assert.Nil(t, parsed3.Epss)
+}
+
+// Test organization data loading
+func TestLoadOrganizationData(t *testing.T) {
+	// Test with valid CSV
+	csvContent := `organisasi;subsektor
+Bank Bni;Perbankan
+Rumah Sakit Siloam;Kesehatan
+Telkom Indonesia;Telekomunikasi`
+
+	tmpFile := "test_org_data.csv"
+	err := os.WriteFile(tmpFile, []byte(csvContent), 0644)
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile)
+
+	orgData, err := loadOrganizationData(tmpFile)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(orgData))
+	assert.Equal(t, "Perbankan", orgData["Bank Bni"])
+	assert.Equal(t, "Kesehatan", orgData["Rumah Sakit Siloam"])
+	assert.Equal(t, "Telekomunikasi", orgData["Telkom Indonesia"])
+
+	// Test with empty filename
+	orgData2, err := loadOrganizationData("")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(orgData2))
+
+	// Test with non-existent file
+	orgData3, err := loadOrganizationData("non_existent.csv")
+	assert.Error(t, err)
+	assert.Equal(t, 0, len(orgData3))
 }
 
 // Test parse record function
@@ -478,7 +585,8 @@ func TestPipelineTestSuite(t *testing.T) {
 // Test race conditions
 func TestConcurrentAccess(t *testing.T) {
 	pipeline := &Pipeline{
-		cveCache: sync.Map{},
+		cveCache:  sync.Map{},
+		epssCache: sync.Map{},
 	}
 
 	// Simulate concurrent cache access
@@ -625,7 +733,8 @@ func TestMemoryUsage(t *testing.T) {
 
 	// Simulate some processing
 	pipeline := &Pipeline{
-		cveCache: sync.Map{},
+		cveCache:  sync.Map{},
+		epssCache: sync.Map{},
 	}
 
 	for i := 0; i < 1000; i++ {

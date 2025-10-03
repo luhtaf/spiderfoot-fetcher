@@ -22,6 +22,7 @@ elasticsearch:
   verify_certs: false                 # Verify SSL certificates
   index: "spiderfoot"                 # Base index name for SpiderFoot data
   cve_index: "go-list-cve-*"         # Index pattern for CVE enrichment data
+  epss_index: "epss-scores"          # Index for EPSS (Exploit Prediction Scoring System) data
 
 # Application Configuration
 app:
@@ -30,6 +31,7 @@ app:
   timestamp_file: "timestamp_cron.txt" # File to store last run timestamp
   fallback_hours: 12                  # Hours to look back when timestamp file doesn't exist
   error_log: "error.log"              # Error log file path
+  organization_data: "organization_data.csv" # CSV file mapping organisasi to subsektor
   
 # Statistics Configuration (Suricata-style monitoring)
 stats:
