@@ -25,6 +25,10 @@ elasticsearch:
   epss_index: "epss-scores"          # Index for EPSS (Exploit Prediction Scoring System) data
 
 # Application Configuration
+# Note: Operation mode is now specified via command line arguments:
+#   spiderfoot-fetcher pipeline  # Process new SpiderFoot scan results
+#   spiderfoot-fetcher migrate   # Update existing Elasticsearch records
+#   spiderfoot-fetcher           # Default to pipeline mode
 app:
   type: "development"                 # "development" or "production"
   version: 2                          # Data schema version

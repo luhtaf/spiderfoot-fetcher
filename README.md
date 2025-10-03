@@ -172,6 +172,7 @@ elasticsearch:
   epss_index: "epss-scores"
 
 # Application Configuration
+# Note: Operation mode is specified via command line arguments
 app:
   type: "development"  # "production" for live indexing
   version: 2
@@ -201,10 +202,9 @@ export ELASTICSEARCH_PASSWORD="your-password"
 **Purpose**: Process new SpiderFoot scan results from SQLite database
 **Use Case**: Regular data ingestion and enrichment
 
-```yaml
-app:
-  mode: "pipeline"
-  version: 6
+```bash
+# Run pipeline mode
+./spiderfoot-fetcher pipeline
 ```
 
 **Features**:
@@ -224,10 +224,9 @@ app:
 **Purpose**: Update existing Elasticsearch records with new enrichment data
 **Use Case**: Applying new features to historical data
 
-```yaml
-app:
-  mode: "migration"
-  version: 6  # Records with version < 6 will be updated
+```bash
+# Run migration mode (updates records with version < current_version)
+./spiderfoot-fetcher migrate
 ```
 
 **Features**:
