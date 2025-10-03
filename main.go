@@ -2010,13 +2010,66 @@ func (p *Pipeline) clearScroll(scrollID string) {
 	}
 }
 
+func printUsage() {
+	fmt.Println("🚀 SpiderFoot to Elasticsearch Pipeline")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  spiderfoot-fetcher [command]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  migrate, migration    Run in migration mode (update existing records)")
+	fmt.Println("  pipeline, run         Run in pipeline mode (process new records)")
+	fmt.Println("  help, -h, --help      Show this help message")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  spiderfoot-fetcher migrate     # Force migration mode")
+	fmt.Println("  spiderfoot-fetcher pipeline    # Force pipeline mode")
+	fmt.Println("  spiderfoot-fetcher              # Use config.yaml mode (fallback: pipeline)")
+	fmt.Println()
+	fmt.Println("Configuration:")
+	fmt.Println("  All settings (database, elasticsearch, etc.) are loaded from config.yaml")
+	fmt.Println("  Command line arguments only override the operation mode")
+}
+
 func main() {
+	// Parse command line arguments
+	var mode string
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrate", "migration":
+			mode = "migration"
+			log.Println("🔧 Migration mode")
+		case "pipeline", "run":
+			mode = "pipeline"
+			log.Println("🔄 Pipeline mode")
+		case "help", "-h", "--help":
+			printUsage()
+			return
+		default:
+			log.Printf("❌ Unknown command: %s", os.Args[1])
+			printUsage()
+			os.Exit(1)
+		}
+	} else {
+		// No arguments provided - use config.yaml mode (fallback to pipeline)
+		log.Println("📋 Using mode from config.yaml")
+	}
+
 	// Load configuration
 	pipeline, err := NewPipeline("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to initialize pipeline: %v", err)
 	}
 	defer pipeline.db.Close()
+
+	// Override mode from command line if provided, otherwise use config
+	if mode != "" {
+		pipeline.config.App.Mode = mode
+	} else if pipeline.config.App.Mode == "" {
+		// Fallback to pipeline mode if config doesn't specify
+		pipeline.config.App.Mode = "pipeline"
+		log.Println("⚠️  No mode specified, defaulting to pipeline mode")
+	}
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

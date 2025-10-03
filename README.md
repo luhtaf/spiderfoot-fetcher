@@ -23,6 +23,8 @@
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
+- [Operation Modes](#operation-modes)
+- [Organization Data](#organization-data)
 - [Pipeline Architecture](#pipeline-architecture)
 - [CVE Enrichment](#cve-enrichment)
 - [Performance Monitoring](#performance-monitoring)
@@ -60,21 +62,71 @@ cp config.yaml.example config.yaml
 # Edit config.yaml with your settings
 ```
 
-### 2. Run the Pipeline
-```bash
-# Development mode (dry run)
-./spiderfoot-fetcher
+### 2. Choose Operation Mode
 
-# Production mode (edit config.yaml first)
+The application supports two distinct operation modes:
+
+#### 🔄 Pipeline Mode (Default)
+Processes new SpiderFoot scan results with full enrichment:
+```bash
+# Command line override (recommended)
+./spiderfoot-fetcher pipeline
+
+# Or set mode in config.yaml
+app:
+  mode: "pipeline"  # Process new scan results
 ./spiderfoot-fetcher
 ```
 
-### 3. Schedule for Production
+#### 🔧 Migration Mode  
+Updates existing Elasticsearch records with new enrichment data:
 ```bash
-# Add to crontab for hourly execution
-0 * * * * /path/to/spiderfoot-fetcher >> /var/log/spiderfoot-pipeline.log 2>&1
+# Command line override (recommended)
+./spiderfoot-fetcher migrate
 
-# Or use systemd timer
+# Or set mode in config.yaml
+app:
+  mode: "migration"  # Update existing records
+./spiderfoot-fetcher
+```
+
+### 3. Command Line Interface
+
+#### Available Commands
+```bash
+# Show help
+./spiderfoot-fetcher help
+
+# Run migration (update existing records)
+./spiderfoot-fetcher migrate
+
+# Run pipeline (process new records)  
+./spiderfoot-fetcher pipeline
+
+# Use config.yaml mode setting
+./spiderfoot-fetcher
+```
+
+#### Development vs Production
+```bash
+# Development mode (dry run - doesn't index to Elasticsearch)
+# Edit config.yaml: app.type = "development"
+./spiderfoot-fetcher migrate
+
+# Production mode (indexes to Elasticsearch)
+# Edit config.yaml: app.type = "production"
+./spiderfoot-fetcher migrate
+```
+
+### 4. Schedule for Production
+```bash
+# Pipeline: Hourly processing of new scan results
+0 * * * * /path/to/spiderfoot-fetcher pipeline >> /var/log/spiderfoot-pipeline.log 2>&1
+
+# Migration: Weekly refresh of CVE/EPSS data (Sunday 2 AM)
+0 2 * * 0 /path/to/spiderfoot-fetcher migrate >> /var/log/spiderfoot-migration.log 2>&1
+
+# Or use systemd timer for pipeline
 sudo systemctl enable --now spiderfoot-fetcher.timer
 ```
 
@@ -142,6 +194,104 @@ export ELASTICSEARCH_URL="https://elasticsearch:9200"
 export ELASTICSEARCH_USERNAME="elastic"
 export ELASTICSEARCH_PASSWORD="your-password"
 ```
+
+## 🔄 Operation Modes
+
+### Pipeline Mode
+**Purpose**: Process new SpiderFoot scan results from SQLite database
+**Use Case**: Regular data ingestion and enrichment
+
+```yaml
+app:
+  mode: "pipeline"
+  version: 6
+```
+
+**Features**:
+- ✅ Reads new records based on timestamp tracking
+- ✅ 3-stage concurrent processing (Reader → Parser → Indexer)
+- ✅ CVE enrichment with CISA and EPSS data
+- ✅ Organization data mapping from CSV
+- ✅ Bulk indexing for high performance
+- ✅ Prevents duplicate processing
+
+**Best for**: 
+- Scheduled cron jobs (hourly/daily)
+- Continuous data ingestion
+- Processing fresh SpiderFoot scans
+
+### Migration Mode
+**Purpose**: Update existing Elasticsearch records with new enrichment data
+**Use Case**: Applying new features to historical data
+
+```yaml
+app:
+  mode: "migration"
+  version: 6  # Records with version < 6 will be updated
+```
+
+**Features**:
+- ✅ Uses Scroll API for large dataset processing
+- ✅ Bulk update operations (500 records/batch)
+- ✅ Progress bar with ETA calculations
+- ✅ Fetches latest CISA and EPSS data
+- ✅ Updates organization subsektor mappings
+- ✅ Version-based targeting
+- ✅ Graceful cancellation support
+
+**Best for**:
+- One-time data migrations
+- Applying new enrichment to existing records
+- Version upgrades and schema updates
+
+**Migration Process**:
+1. Counts total records to migrate
+2. Uses Scroll API to process in batches of 5000
+3. Updates records in bulk chunks of 500
+4. Shows real-time progress with speed/ETA
+5. Updates version number to prevent re-processing
+
+### 🔄 Why Migration is Important
+
+**CVE and EPSS Data is Dynamic**:
+CVE scores and EPSS (Exploit Prediction Scoring System) data change frequently:
+
+```
+Day 1: CVE-2023-45802 → Score: 6.0, EPSS: 0.02
+Day 2: CVE-2023-45802 → Score: 7.5, EPSS: 0.85  ⚠️ Higher risk!
+```
+
+**The Problem with Static Records**:
+- 📊 **Pipeline Mode**: Only processes NEW SpiderFoot scan results
+- 📝 **Elasticsearch Records**: Remain static after initial indexing
+- ⏰ **CVE/EPSS Updates**: Happen daily but don't automatically update existing records
+
+**Solution - Regular Migration**:
+```bash
+# Weekly migration to refresh CVE/EPSS data (recommended)
+0 2 * * 0 /path/to/spiderfoot-fetcher migrate  # Sunday 2 AM
+
+# Manual migration when needed
+./spiderfoot-fetcher migrate
+
+# Increment version in config.yaml to force refresh
+app:
+  version: 7  # Increment when you need to refresh all data
+```
+
+**Real-world Example**:
+```
+Jan 1: Record created with CVE-2023-45802, Score: 6.0 (MEDIUM)
+Jan 5: CVE database updated, same CVE now Score: 7.5 (HIGH)
+       → Your Elasticsearch record still shows 6.0 ❌
+Jan 7: Run migration → Record updated to 7.5 ✅
+```
+
+**Migration Triggers**:
+- 🔄 Weekly/monthly data refresh
+- 🚨 After major CVE database updates
+- 📈 When EPSS scores change significantly
+- 🆕 Adding new enrichment features
 
 ## 🏢 Organization Data
 
