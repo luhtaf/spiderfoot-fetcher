@@ -2030,27 +2030,77 @@ func printUsage() {
 	fmt.Println("  All settings are loaded from config.yaml")
 }
 
-func main() {
-	// Get command argument if provided
-	command := ""
+func parseCommandArgs() string {
 	if len(os.Args) > 1 {
-		command = os.Args[1]
+		return os.Args[1]
 	}
+	return ""
+}
 
-	// Default to pipeline mode
-	mode := "pipeline"
+func validateCommand(command string) string {
 	switch command {
 	case "migrate", "pipeline":
-		mode = command
-		log.Printf("🔧 %s mode", mode)
+		log.Printf("🔧 %s mode", command)
+		return command
 	case "help", "-h", "--help":
 		printUsage()
-		return
+		os.Exit(0)
 	default:
 		log.Printf("❌ Unknown command: %s", command)
 		printUsage()
 		os.Exit(1)
 	}
+	return "pipeline" // Default fallback
+}
+
+func runWithGracefulShutdown(ctx context.Context, cancel context.CancelFunc, sigChan chan os.Signal, runner func(context.Context) error, mode string) {
+	// Run in goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- runner(ctx)
+	}()
+
+	// Wait for completion or signal
+	select {
+	case err := <-errChan:
+		handleRunCompletion(err, mode)
+	case sig := <-sigChan:
+		handleSignalShutdown(sig, cancel, errChan, mode)
+	}
+}
+
+func handleRunCompletion(err error, mode string) {
+	if err != nil && err != context.Canceled {
+		log.Fatalf("%s failed: %v", strings.Title(mode), err)
+	}
+	if err == context.Canceled {
+		log.Printf("%s cancelled by user", strings.Title(mode))
+	} else {
+		log.Printf("%s completed successfully", strings.Title(mode))
+	}
+}
+
+func handleSignalShutdown(sig os.Signal, cancel context.CancelFunc, errChan chan error, mode string) {
+	log.Printf("Received signal %v, cancelling %s...", sig, mode)
+	cancel()
+
+	// Wait for graceful shutdown or timeout
+	select {
+	case err := <-errChan:
+		if err != nil && err != context.Canceled {
+			log.Printf("%s cancelled with error: %v", strings.Title(mode), err)
+		} else {
+			log.Printf("%s cancelled gracefully", strings.Title(mode))
+		}
+	case <-time.After(30 * time.Second):
+		log.Printf("%s cancellation timeout, forcing exit", strings.Title(mode))
+	}
+}
+
+func main() {
+	// Parse and validate command
+	command := parseCommandArgs()
+	mode := validateCommand(command)
 
 	// Load configuration
 	pipeline, err := NewPipeline("config.yaml")
@@ -2059,84 +2109,19 @@ func main() {
 	}
 	defer pipeline.db.Close()
 
-	// Set mode
-	pipeline.config.App.Mode = mode
-
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle signals for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Check mode and run appropriate function
-	if pipeline.config.App.Mode == "migration" {
+	// Run appropriate mode
+	if mode == "migration" {
 		log.Println("Running in MIGRATION mode...")
-
-		// Run migration in goroutine to handle cancellation
-		migrationChan := make(chan error, 1)
-		go func() {
-			migrationChan <- pipeline.RunMigration(ctx)
-		}()
-
-		// Wait for completion or signal
-		select {
-		case err := <-migrationChan:
-			if err != nil && err != context.Canceled {
-				log.Fatalf("Migration failed: %v", err)
-			}
-			if err == context.Canceled {
-				log.Println("Migration cancelled by user")
-			} else {
-				log.Println("Migration completed successfully")
-			}
-		case sig := <-sigChan:
-			log.Printf("Received signal %v, cancelling migration...", sig)
-			cancel()
-
-			// Wait for migration to finish gracefully or timeout
-			select {
-			case err := <-migrationChan:
-				if err != nil && err != context.Canceled {
-					log.Printf("Migration cancelled with error: %v", err)
-				} else {
-					log.Println("Migration cancelled gracefully")
-				}
-			case <-time.After(30 * time.Second):
-				log.Println("Migration cancellation timeout, forcing exit")
-			}
-		}
-		return
-	}
-
-	// Run pipeline in goroutine
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- pipeline.Run(ctx)
-	}()
-
-	// Wait for completion or signal
-	select {
-	case err := <-errChan:
-		if err != nil {
-			log.Fatalf("Pipeline failed: %v", err)
-		}
-		log.Println("Pipeline completed successfully")
-	case sig := <-sigChan:
-		log.Printf("Received signal %v, initiating graceful shutdown...", sig)
-		cancel()
-
-		// Wait for pipeline to finish gracefully or timeout
-		select {
-		case err := <-errChan:
-			if err != nil && err != context.Canceled {
-				log.Printf("Pipeline shutdown with error: %v", err)
-			} else {
-				log.Println("Pipeline shutdown gracefully")
-			}
-		case <-time.After(30 * time.Second):
-			log.Println("Shutdown timeout exceeded, forcing exit")
-		}
+		runWithGracefulShutdown(ctx, cancel, sigChan, pipeline.RunMigration, mode)
+	} else {
+		log.Println("Running in PIPELINE mode...")
+		runWithGracefulShutdown(ctx, cancel, sigChan, pipeline.Run, mode)
 	}
 }
