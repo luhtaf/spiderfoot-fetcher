@@ -1046,8 +1046,15 @@ func (p *Pipeline) parserWorker(ctx context.Context, workerID int) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Parser worker %d cancelled", workerID)
 			return
-		case raw := <-p.rawChan:
+		case raw, ok := <-p.rawChan:
+			if !ok {
+				// Channel closed, no more data
+				log.Printf("Parser worker %d finished - channel closed", workerID)
+				return
+			}
+
 			start := time.Now()
 
 			parsed, err := p.parseRecord(raw)
@@ -1059,6 +1066,7 @@ func (p *Pipeline) parserWorker(ctx context.Context, workerID int) {
 			select {
 			case p.parsedChan <- parsed:
 			case <-ctx.Done():
+				log.Printf("Parser worker %d cancelled during send", workerID)
 				return
 			}
 
@@ -1279,11 +1287,19 @@ func (p *Pipeline) indexerWorker(ctx context.Context, workerID int) {
 		case <-ctx.Done():
 			// Flush remaining buffer before exit
 			p.flushBulkBuffer()
+			log.Printf("Indexer worker %d cancelled", workerID)
 			return
 		case <-flushTicker.C:
 			// Periodic flush
 			p.flushBulkBuffer()
-		case parsed := <-p.parsedChan:
+		case parsed, ok := <-p.parsedChan:
+			if !ok {
+				// Channel closed, no more data
+				p.flushBulkBuffer()
+				log.Printf("Indexer worker %d finished - channel closed", workerID)
+				return
+			}
+
 			start := time.Now()
 
 			if err := p.addToBulkBuffer(parsed); err != nil {
@@ -1364,37 +1380,53 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	log.Printf("Processing records from %d to %d", lastTimestamp, nowTimestamp)
 
 	// Start worker goroutines
-	var wg sync.WaitGroup
+	var readerWg, parserWg, indexerWg sync.WaitGroup
 
 	// Start reader workers
 	for i := 0; i < p.config.Workers.Reader; i++ {
-		wg.Add(1)
+		readerWg.Add(1)
 		go func(workerID int) {
-			defer wg.Done()
+			defer readerWg.Done()
 			p.readerWorker(ctx, workerID, lastTimestamp, nowTimestamp)
 		}(i)
 	}
 
 	// Start parser workers
 	for i := 0; i < p.config.Workers.Parser; i++ {
-		wg.Add(1)
+		parserWg.Add(1)
 		go func(workerID int) {
-			defer wg.Done()
+			defer parserWg.Done()
 			p.parserWorker(ctx, workerID)
 		}(i)
 	}
 
 	// Start indexer workers
 	for i := 0; i < p.config.Workers.Indexer; i++ {
-		wg.Add(1)
+		indexerWg.Add(1)
 		go func(workerID int) {
-			defer wg.Done()
+			defer indexerWg.Done()
 			p.indexerWorker(ctx, workerID)
 		}(i)
 	}
 
+	// Wait for reader workers to complete, then close raw channel
+	go func() {
+		readerWg.Wait()
+		close(p.rawChan)
+		log.Println("Reader workers completed, raw channel closed")
+	}()
+
+	// Wait for parser workers to complete, then close parsed channel
+	go func() {
+		parserWg.Wait()
+		close(p.parsedChan)
+		log.Println("Parser workers completed, parsed channel closed")
+	}()
+
 	// Wait for all workers to complete
-	wg.Wait()
+	readerWg.Wait()
+	parserWg.Wait()
+	indexerWg.Wait()
 
 	// Final flush of any remaining bulk buffer
 	if err := p.flushBulkBuffer(); err != nil {
