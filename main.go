@@ -2149,7 +2149,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	// Run appropriate mode
-	if mode == "migration" {
+	if mode == "migrate" {
 		log.Println("Running in MIGRATION mode...")
 		runWithGracefulShutdown(ctx, cancel, sigChan, pipeline.RunMigration, mode)
 	} else {
