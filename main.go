@@ -128,7 +128,9 @@ type ParsedRecord struct {
 	// Additional CVE metadata
 	LastModified string `json:"lastModified,omitempty"`
 	Published    string `json:"published,omitempty"`
-	VulnStatus   string `json:"vulnStatus,omitempty"`
+	VulnStatus   string         `json:"vulnStatus,omitempty"`
+	Affected     []AffectedData `json:"affected,omitempty"`
+	OriginalVuln interface{}    `json:"originalVuln,omitempty"`
 }
 
 type CisaData struct {
@@ -136,6 +138,12 @@ type CisaData struct {
 	CisaExploitAdd        string `json:"cisaExploitAdd"`
 	CisaRequiredAction    string `json:"cisaRequiredAction"`
 	CisaVulnerabilityName string `json:"cisaVulnerabilityName"`
+}
+
+type AffectedData struct {
+	Product string `json:"product"`
+	Vendor  string `json:"vendor"`
+	Version string `json:"version"`
 }
 
 type EpssData struct {
@@ -157,7 +165,9 @@ type CVEData struct {
 	Source       string     `json:"source"`
 	V2           *ScoreData `json:"v2,omitempty"`
 	V3           *ScoreData `json:"v3,omitempty"`
-	VulnStatus   string     `json:"vulnStatus"`
+	VulnStatus   string         `json:"vulnStatus"`
+	Affected     []AffectedData `json:"affected"`
+	Original     interface{}    `json:"original"`
 }
 
 type ScoreData struct {
@@ -1224,6 +1234,8 @@ func (p *Pipeline) applyCVEData(parsed *ParsedRecord, cve CVEData) {
 	parsed.LastModified = cve.LastModified
 	parsed.Published = cve.Published
 	parsed.VulnStatus = cve.VulnStatus
+	parsed.Affected = cve.Affected
+	parsed.OriginalVuln = cve.Original
 }
 
 func (p *Pipeline) enrichEPSS(parsed *ParsedRecord) error {
@@ -1717,6 +1729,12 @@ func (p *Pipeline) applyCVEDataToUpdate(cve CVEData, updateDoc map[string]interf
 	}
 	if cve.VulnStatus != "" {
 		updateDoc["vulnStatus"] = cve.VulnStatus
+	}
+	if len(cve.Affected) > 0 {
+		updateDoc["affected"] = cve.Affected
+	}
+	if cve.Original != nil {
+		updateDoc["originalVuln"] = cve.Original
 	}
 }
 
