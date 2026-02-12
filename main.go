@@ -126,8 +126,8 @@ type ParsedRecord struct {
 	Epss     *EpssData `json:"epss,omitempty"`
 
 	// Additional CVE metadata
-	LastModified string `json:"lastModified,omitempty"`
-	Published    string `json:"published,omitempty"`
+	LastModified string         `json:"lastModified,omitempty"`
+	Published    string         `json:"published,omitempty"`
 	VulnStatus   string         `json:"vulnStatus,omitempty"`
 	Affected     []AffectedData `json:"affected,omitempty"`
 	OriginalVuln interface{}    `json:"originalVuln,omitempty"`
@@ -155,16 +155,16 @@ type EpssData struct {
 }
 
 type CVEData struct {
-	Desc         string     `json:"desc"`
-	HasCisa      bool       `json:"hasCisa"`
-	Cisa         *CisaData  `json:"cisa,omitempty"`
-	LastModified string     `json:"lastModified"`
-	Published    string     `json:"published"`
-	Score        float64    `json:"score"`
-	Sev          string     `json:"sev"`
-	Source       string     `json:"source"`
-	V2           *ScoreData `json:"v2,omitempty"`
-	V3           *ScoreData `json:"v3,omitempty"`
+	Desc         string         `json:"desc"`
+	HasCisa      bool           `json:"hasCisa"`
+	Cisa         *CisaData      `json:"cisa,omitempty"`
+	LastModified string         `json:"lastModified"`
+	Published    string         `json:"published"`
+	Score        float64        `json:"score"`
+	Sev          string         `json:"sev"`
+	Source       string         `json:"source"`
+	V2           *ScoreData     `json:"v2,omitempty"`
+	V3           *ScoreData     `json:"v3,omitempty"`
 	VulnStatus   string         `json:"vulnStatus"`
 	Affected     []AffectedData `json:"affected"`
 	Original     interface{}    `json:"original"`
@@ -1745,7 +1745,14 @@ func (p *Pipeline) processMigrationBatch(ctx context.Context, hits []struct {
 }) (int, error) {
 	// Process in chunks for bulk updates (500 records per bulk request)
 	bulkSize := 500
-	totalUpdated := 0
+	var totalUpdated int64
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Create a buffered channel to limit concurrency (e.g., 20 concurrent bulk requests)
+	sem := make(chan struct{}, 20)
+	// Channel to capture the first error encountered
+	errChan := make(chan error, 1)
 
 	for i := 0; i < len(hits); i += bulkSize {
 		end := i + bulkSize
@@ -1753,47 +1760,81 @@ func (p *Pipeline) processMigrationBatch(ctx context.Context, hits []struct {
 			end = len(hits)
 		}
 
-		chunk := hits[i:end]
-		bulkUpdates := make([]BulkUpdateItem, 0, len(chunk))
-
-		// Prepare bulk update items
-		for _, hit := range chunk {
-			updateDoc := p.prepareMigrationUpdate(hit)
-			if len(updateDoc) > 0 {
-				bulkUpdates = append(bulkUpdates, BulkUpdateItem{
-					Index: hit.Index,
-					ID:    hit.ID,
-					Doc:   updateDoc,
-				})
-			}
-		}
-
-		if len(bulkUpdates) == 0 {
-			continue
-		}
-
-		// Perform bulk update
-		if err := p.es.BulkUpdate(bulkUpdates); err != nil {
-			log.Printf("Bulk update failed for chunk %d-%d: %v", i, end-1, err)
-			// Continue with next chunk instead of failing entirely
-			continue
-		}
-
-		totalUpdated += len(bulkUpdates)
-		// Only log every 10th chunk to reduce spam
-		if (i/bulkSize)%10 == 0 {
-			log.Printf("Progress: %d records updated so far...", totalUpdated)
-		}
-
-		// Check for cancellation
+		// Check if we should stop early due to error
 		select {
+		case <-errChan:
+			goto Finish
 		case <-ctx.Done():
-			return totalUpdated, ctx.Err()
+			return int(totalUpdated), ctx.Err()
 		default:
 		}
+
+		wg.Add(1)
+		sem <- struct{}{} // Acquire token
+
+		go func(start, end int) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release token
+
+			chunk := hits[start:end]
+			bulkUpdates := make([]BulkUpdateItem, 0, len(chunk))
+
+			// Prepare bulk update items
+			for _, hit := range chunk {
+				// Check context periodically
+				if ctx.Err() != nil {
+					return
+				}
+
+				updateDoc := p.prepareMigrationUpdate(hit)
+				if len(updateDoc) > 0 {
+					bulkUpdates = append(bulkUpdates, BulkUpdateItem{
+						Index: hit.Index,
+						ID:    hit.ID,
+						Doc:   updateDoc,
+					})
+				}
+			}
+
+			if len(bulkUpdates) == 0 {
+				return
+			}
+
+			// Perform bulk update
+			if err := p.es.BulkUpdate(bulkUpdates); err != nil {
+				log.Printf("Bulk update failed for chunk %d-%d: %v", start, end-1, err)
+				// Try to report error but don't block
+				select {
+				case errChan <- err:
+				default:
+				}
+				return
+			}
+
+			// Safely update counter and log progress
+			mu.Lock()
+			totalUpdated += int64(len(bulkUpdates))
+			currentTotal := totalUpdated
+			mu.Unlock()
+
+			// Only log occasionally to reduce spam (pseudo-randomly or based on threshold)
+			if start == 0 || currentTotal%5000 == 0 {
+				log.Printf("Progress: Batch processed, total updated in this scroll: %d...", currentTotal)
+			}
+		}(i, end)
 	}
 
-	return totalUpdated, nil
+Finish:
+	wg.Wait()
+
+	// Check if any error occurred
+	select {
+	case err := <-errChan:
+		return int(totalUpdated), err
+	default:
+	}
+
+	return int(totalUpdated), nil
 }
 
 // Estimate total migration jobs using count API
