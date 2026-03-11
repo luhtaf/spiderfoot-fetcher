@@ -21,7 +21,7 @@ elasticsearch:
   password: "changeme"                # Elasticsearch password (optional)
   verify_certs: false                 # Verify SSL certificates
   index: "spiderfoot"                 # Base index name for SpiderFoot data
-  cve_index: "go-list-cve-*"         # Index pattern for CVE enrichment data
+  cve_index: "list-cve"               # Index name for CVE enrichment data
   epss_index: "epss-scores"          # Index for EPSS (Exploit Prediction Scoring System) data
 
 # Application Configuration

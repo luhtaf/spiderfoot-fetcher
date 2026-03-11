@@ -1325,9 +1325,7 @@ func (p *Pipeline) indexerWorker(ctx context.Context, workerID int) {
 }
 
 func (p *Pipeline) addToBulkBuffer(record ParsedRecord) error {
-	// Generate index name with date
-	timestamp := strings.Split(record.Updated, " ")[0]
-	indexName := fmt.Sprintf("%s-%s", p.config.Elasticsearch.Index, strings.ReplaceAll(timestamp, "-", "."))
+	indexName := p.config.Elasticsearch.Index
 
 	if p.config.App.Type == "development" {
 		log.Printf("Development mode - would index to %s: %s", indexName, record.ScanName)
