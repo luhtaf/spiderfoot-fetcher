@@ -43,6 +43,18 @@ stats:
   interval: 30s                       # Stats write interval (e.g., 10s, 1m, 5m)
   file: "pipeline_stats.json"         # Stats output file
 
+# Geo-location Enrichment (Nominatim) — opt-in; omit the section to disable.
+# Adds location/geo_source/geo_query/geo_original_query from Organisasi.
+geo:
+  enabled: true
+  endpoint: "http://nominatim.th"
+  user_agent: "spiderfoot-geo-enricher"
+  min_delay: 100ms
+  timeout: 10s
+  max_retries: 8
+  rate_limit_429_sleep: 5m
+  retry_sleep: 30s
+
 # SQL Query for data extraction
 # This query retrieves ALL scan results using explicit columns to match main.go's Scan order.
 # Using '-' for missing values prevents crashes (NULL) and bypasses the isEmptySource filter.

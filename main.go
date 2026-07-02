@@ -43,6 +43,20 @@ type Config struct {
 	App           AppConfig           `yaml:"app"`
 	SQLQuery      string              `yaml:"sql_query"`
 	Stats         StatsConfig         `yaml:"stats"`
+	Geo           GeoConfig           `yaml:"geo"`
+}
+
+// GeoConfig controls geo-location enrichment via a Nominatim service.
+// When the geo: section is absent, Enabled defaults to false (opt-in).
+type GeoConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	Endpoint          string        `yaml:"endpoint"`
+	UserAgent         string        `yaml:"user_agent"`
+	MinDelay          time.Duration `yaml:"min_delay"`
+	Timeout           time.Duration `yaml:"timeout"`
+	MaxRetries        int           `yaml:"max_retries"`
+	RateLimit429Sleep time.Duration `yaml:"rate_limit_429_sleep"`
+	RetrySleep        time.Duration `yaml:"retry_sleep"`
 }
 
 type DatabaseConfig struct {
@@ -131,6 +145,12 @@ type ParsedRecord struct {
 	VulnStatus   string         `json:"vulnStatus,omitempty"`
 	Affected     []AffectedData `json:"affected,omitempty"`
 	OriginalVuln interface{}    `json:"originalVuln,omitempty"`
+
+	// Geo enrichment fields (mirror updatelat.py output)
+	Location         *GeoPoint `json:"location,omitempty"`
+	GeoSource        string    `json:"geo_source,omitempty"`
+	GeoQuery         string    `json:"geo_query,omitempty"`
+	GeoOriginalQuery string    `json:"geo_original_query,omitempty"`
 }
 
 type CisaData struct {
@@ -802,6 +822,7 @@ type Pipeline struct {
 	stats       *StatsCollector
 	cveCache    sync.Map
 	epssCache   sync.Map
+	geo         *GeoEnricher
 	errorLogger *log.Logger
 
 	// Channels for pipeline stages
@@ -850,11 +871,18 @@ func NewPipeline(configFile string) (*Pipeline, error) {
 		orgData = make(map[string]string) // Use empty map as fallback
 	}
 
+	// Initialize geo enricher (nil when geo.enabled is false)
+	geo := NewGeoEnricher(config.Geo)
+	if geo != nil {
+		log.Printf("Geo enrichment enabled (endpoint: %s)", config.Geo.Endpoint)
+	}
+
 	return &Pipeline{
 		config:      config,
 		db:          db,
 		es:          es,
 		stats:       stats,
+		geo:         geo,
 		errorLogger: errorLogger,
 		orgData:     orgData,
 		rawChan:     make(chan RawRecord, config.Batch.Size*2),
@@ -1096,6 +1124,9 @@ func (p *Pipeline) parseRecord(raw RawRecord) (ParsedRecord, error) {
 	// Parse organization information
 	p.parseOrganizationInfo(&parsed, raw.ScanName)
 
+	// Geo-location enrichment based on Organisasi
+	p.applyGeoIfNeeded(&parsed)
+
 	// Format timestamp for Elasticsearch
 	p.formatTimestamp(&parsed, raw.Generated)
 
@@ -1135,6 +1166,28 @@ func (p *Pipeline) parseOrganizationInfo(parsed *ParsedRecord, scanName string) 
 	if subsektor, exists := p.orgData[organisasi]; exists {
 		parsed.Subsektor = subsektor
 	}
+}
+
+// applyGeoIfNeeded enriches a record with geo-location derived from Organisasi.
+// Failures are non-fatal: the record is still indexed without a location.
+func (p *Pipeline) applyGeoIfNeeded(parsed *ParsedRecord) {
+	if p.geo == nil || parsed.Organisasi == "" {
+		return
+	}
+
+	point, query, err := p.geo.EnrichOrganization(parsed.Organisasi)
+	if err != nil {
+		log.Printf("Geo enrichment failed for %s: %v", parsed.Organisasi, err)
+		return
+	}
+	if point == nil {
+		return
+	}
+
+	parsed.Location = point
+	parsed.GeoSource = "Organisasi"
+	parsed.GeoQuery = query
+	parsed.GeoOriginalQuery = parsed.Organisasi
 }
 
 func (p *Pipeline) formatTimestamp(parsed *ParsedRecord, generated int64) {
@@ -1586,6 +1639,13 @@ func (p *Pipeline) prepareMigrationUpdate(hit struct {
 		if subsektor, exists := p.orgData[organisasi]; exists {
 			updateDoc["Subsektor"] = subsektor
 		}
+
+		// Geo enrichment: only when enabled and the document has no location yet.
+		if p.geo != nil {
+			if _, hasLocation := hit.Source["location"]; !hasLocation {
+				p.applyGeoToUpdate(organisasi, updateDoc)
+			}
+		}
 	}
 
 	// Only do enrichment if record has a CVE vulnerability (check Vulnerability or Vuln field)
@@ -1614,6 +1674,24 @@ func (p *Pipeline) quickEnrichment(vulnerability string, updateDoc map[string]in
 	if err := p.fetchAndApplyEPSSData(vulnerability, updateDoc); err != nil {
 		// Silently continue if EPSS data fetch fails
 	}
+}
+
+// applyGeoToUpdate geocodes an organization and adds the geo fields to a
+// migration update document. Failures are non-fatal and leave updateDoc unchanged.
+func (p *Pipeline) applyGeoToUpdate(organisasi string, updateDoc map[string]interface{}) {
+	point, query, err := p.geo.EnrichOrganization(organisasi)
+	if err != nil {
+		log.Printf("Geo enrichment failed for %s: %v", organisasi, err)
+		return
+	}
+	if point == nil {
+		return
+	}
+
+	updateDoc["location"] = point
+	updateDoc["geo_source"] = "Organisasi"
+	updateDoc["geo_query"] = query
+	updateDoc["geo_original_query"] = organisasi
 }
 
 func (p *Pipeline) fetchAndApplyCVEData(vulnerability string, updateDoc map[string]interface{}) error {

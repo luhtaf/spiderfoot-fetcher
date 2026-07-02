@@ -42,6 +42,20 @@ stats:
   enabled: true                       # Enable/disable stats collection
   interval: 30s                       # Stats write interval (e.g., 10s, 1m, 5m)
   file: "pipeline_stats.json"         # Stats output file
+
+# Geo-location Enrichment (Nominatim)
+# Adds a `location` geo_point (plus geo_source/geo_query/geo_original_query) to
+# documents, derived from the Organisasi field. Applied in both pipeline and
+# migrate modes. Opt-in: when this whole section is omitted, geo is disabled.
+geo:
+  enabled: true
+  endpoint: "http://nominatim.th"     # Nominatim base URL (self-hosted)
+  user_agent: "spiderfoot-geo-enricher"
+  min_delay: 100ms                    # Min delay between geocode requests (small for self-hosted)
+  timeout: 10s                        # Per-request HTTP timeout
+  max_retries: 8                      # Retries before giving up on a query
+  rate_limit_429_sleep: 5m            # Backoff base when Nominatim returns HTTP 429
+  retry_sleep: 30s                    # Backoff base for transient errors
   
 # SQL Query for data extraction
 sql_query: |

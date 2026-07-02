@@ -84,3 +84,6 @@ release/
 
 # Data directories
 data/
+
+# Python reference scripts (not part of the Go build)
+*.py
